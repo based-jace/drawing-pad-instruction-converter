@@ -37,8 +37,7 @@ class AHexDecConverter:
             hiBool = self.CheckHex(hi)
             loBool = self.CheckHex(lo)
             if not(hiBool and loBool):
-                pass
-                # raise ValueError("Decodable Hi and Lo hex values must each be represented by two characters between '00' and 'ff.'")
+                raise ValueError("Decodable Hi and Lo hex values must each be represented by two characters between '00' and 'ff.'")
         except ValueError as error:
             sys.exit("ValueError: " + str(error))
         except Exception as e:
