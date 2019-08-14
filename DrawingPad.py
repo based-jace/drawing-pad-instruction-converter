@@ -1,294 +1,476 @@
 from HexDecConverter import AHexDecConverter
-import sys, copy
+
+import math
 
 class ADrawingPad:
-    ''' 
-    Takes encoded hexadecimal data strings and converts commands into commands for a drawing pad program.
     '''
-
-    # Minimum and Maximum possible color values
+    A class that takes encoded hexadecimal-parameters
+    and outputs commands for a drawing pad program.
+    '''
+    # Minimum and Maximum Color Values
     kMinMaxColorValues = (0, 255)
 
-    # Minimum and Maximum possible coordinate values
-    kMinMaxCoordinateValues = (-8192, 8191)
+    # Minimum and Maximum Coordinate Point Values 
+                                # ((x-min, x-max), (y-min, y-max))
+    kMinMaxCoordinatePointValues = ((-8192, 8191), (-8192, 8191))
 
-    # A dictionary of codes and their corresponding ["DrawingPad Command", numberOfByteCodesPerArgument]
-    # NOTE: The number of byte codes for "MV" is -1, because it can be any number of pairs (any multiple of 4 codes)
-    kCodeBook = {
-        "F0": ["CLR", 0], 
-        "80": ["PEN", 2],
-        "A0": ["C0", 8], 
-        "C0": ["MV", -1]
+    # Opcode dictionary. 
+    # Values are the translated command and number of byte args
+    kCodebook = {
+        "F0": ("CLR", 0),
+        "80": ("PEN", 2),
+        "A0": ("C0", 8),
+        "C0": ("MV", 4)
     }
 
-    # For Accessing Codes from the codebook manually
-    kPlainEnglishCodes = {
-        "CLEAR": "F0",
-        "PEN": "80",
-        "COLOR": "A0",
-        "MOVE": "C0"
-    }
+    # Minimum and Maximum decoded values from bytes
+    kByteValueBounds = (-8192, 8191)
 
     def __init__(self):
-        # Utilizes the HexDecConverter from the first test
+        # I recognize that a lot of these also fall under the "Clear()" method,
+        # but I put them here again for readability
+
+        # Our byte encoder/decoder class from alpc1
         self.hexDecConverter = AHexDecConverter()
 
-        # All commands performed since starting program
-        self.commandsPerformed = ""
+        self.currentPoint = (0, 0)      # Current pen coordinates
+        self.lastPoint = (0, 0)         # last pen coordinates
+        self.penUp = True               # If the pen is currently up or not
+        self.outOfBounds = False        # If we're out of bounds
+        self.penColor = (0, 0, 0, 255)  # The pen's current color
 
-        # Current command being created
-        self. currentCommand = ""
+        # List of all commands since the program was started
+        self.commandList = []           
 
-        # Last set of commands performed
-        self.lastCommandSet = []
-
-        self.Clear(False)
-        
-    def Clear(self, addCommandToList=True):
-        ''' 
-        Sets the pen color to black, sets the pen position to origin, and raises the pen 
-        '''
-
-        self.penColor = (0, 0, 0, 255)  # Color: Black
-        self.penPosition = (0, 0)       # Point: Origin
-        self.penUp = True               # Pen:   Raised
-        self.outOfBounds = False        # Overwrites whether pen is raised
-        if addCommandToList:
-            self.AddAndResetCurrentCommand(self.GetCodePlainEnglish("CLEAR")[0])
+        # List of commands from the last time Action() was run
+        self.currentCommandList = []
 
     def Action(self, hexString):
-        ''' 
-        Main method - takes a string representing encoded instruction, and returns decoded drawing commands 
         '''
+        Parses hexString for opcodes, then translates the opcodes 
+        and their arguments from encoded hexadecimal values to
+        commands for a drawing pad program.
 
-        self.EnsureCommandString(hexString)
-        return self.GetDrawingCommandList(hexString)
-
-    def EnsureCommandString(self, hexString):
-        ''' 
-        Tests that a hex string is even and is valid hexadecimal 
+        Returns the stringified representation of the parsed commandList
+        or an error message.
         '''
+        hexStringLength = len(hexString)
 
-        try:
-            int(hexString, 16)
-            if len(str(hexString)) % 2 != 0:
-                raise ValueError("ValueError: Hex String has an odd number of characters")
-        except Exception as error:
-            print(error)
-            return False
-        return True
-
-    def GetDrawingCommandList(self, hexString):
-        ''' 
-        Returns a string made up of formatted drawing commands 
-        '''
-
-        # Splits the hexString into a list of two-character strings
-        hexList = [hexString[i:i+2] for i in range(0, len(hexString), 2)]
-
-        # Caches to keep track of pontential routes
-        hexCache, commandCache, penUpCache = [], [], []
-        coordList = []
-        self.lastCommandSet = []
-        hexcode = hexList.pop(0)
-        hexPair = self.kCodeBook[hexcode]
-        print(hexList)
-        while len(hexList) > 0:
-            try:
-                if hexcode == "":
-                    hexcode = hexList.pop(0)
-                    if self.TestCodeBook(hexcode):
-                        hexPair = self.kCodeBook[hexcode]
-                    else:
-                        raise ValueError("ValueError: Command not found")
-
-                if hexPair[1] == -1:
-                    xCoord = "".join([hexList.pop(0) for i in range(2)])
-                    yCoord = "".join([hexList.pop(0) for i in range(2)])
-                    coordList.append([xCoord, yCoord])
-                    if len(hexList) > 0 and hexList[0] in self.kCodeBook:
-                        (self.BuildCommand(hexPair[0], coordList))
-                        hexCache.append(hexList)
-                        commandCache.append(self.lastCommandSet)
-                        penUpCache.append(self.penUp)
-                        hexcode = hexList.pop(0)
-                        hexPair = self.kCodeBook[hexcode]
-                else:
-                    commandArgs = ["".join([hexList.pop(0), hexList.pop(0)]) for i in range(0, hexPair[1], 2)]
-                    self.BuildCommand(hexPair[0], commandArgs)
-                    hexcode = ""
-            except: 
-                hexList = hexCache.pop()
-                self.lastCommandSet = commandCache.pop()
-                hexPair = self.kCodeBook[hexList.pop(0)]
-                self.penUp = penUpCache.pop()
-        # print(self.lastCommandSet)
-        commandString = ";\n".join(self.lastCommandSet) + ";"
-        self.commandsPerformed += "\n" + commandString
-        return commandString
-
-    def TestCodeBook(self, command):
-        if command in self.kCodeBook:
-            return True
-        return False
-
-    def BuildCommand(self, command, hexArgs):
-        '''
-        Creates command output from given commandPair and encoded arguments
-        '''
-
-        # Clear DrawingPad
-        if command == "CLR":
-            self.Clear()
-
-        # Move Pen
-        elif command == "MV":
-            decodedCoordinates = [
-                [
-                    self.hexDecConverter.Decode(coordPair[0][:2], coordPair[0][2:]),
-                    self.hexDecConverter.Decode(coordPair[1][:2], coordPair[1][2:])
-                ]
-                for coordPair in hexArgs
+        # If more than one char in hexString
+        if hexStringLength > 1:
+            # If an odd number of chars
+            if hexStringLength % 2 > 0:
+                hexString = hexString[:-1]
+            # Split the list into bytecodes
+            hexList = [
+                hexString[i] + hexString[i+1] 
+                for i in range(0, len(hexString), 2)
             ]
-            self.MovePen(decodedCoordinates)
+        else:
+            return("Not enough arguments given.")
 
-        # Raise/Lower Pen
-        elif command == "PEN":
-            hi, lo = hexArgs[0][:2], hexArgs[0][2:]
-            # print(hi, lo)
-            upOrDownCode = self.hexDecConverter.Decode(hi, lo)
-            if not self.outOfBounds:
-                if int(upOrDownCode) == 0:
-                    self.SetPenUp(True)
-                    command += " UP"
-                else:
-                    self.SetPenUp(False)
-                    command += " DOWN"
-                self.AddAndResetCurrentCommand(command)
+        # Resets Current Command List
+        self.currentCommandList = []
 
-        # Set Pen Color
-        elif command == "C0":
-            commandArgs = [str(self.hexDecConverter.Decode(arg[:2], arg[2:])) for arg in hexArgs]
-            for arg, i in enumerate(hexArgs):
-                numArg = int(arg)
-                if numArg > self.kMinMaxColorValues[1]:
-                    hexArgs[i] = self.kMinMaxColorValues[1]
-                elif numArg < self.kMinMaxColorValues[0]:
-                    hexArgs[i] = self.kMinMaxColorValues[0]
+        # Current Opcode
+        currentCode = ""
 
-            command += " " + " ".join(commandArgs)
-            self.AddAndResetCurrentCommand(command)
+        # While there are codes in hexList
+        while len(hexList) > 0:
+            # Args to send with our command
+            hexArgs = []
+
+            try:
+                # Keep popping until we get a valid opcode
+                while currentCode not in self.kCodebook:
+                    currentCode = hexList.pop(0)
+            except:
+                pass # End of list
+
+            # If our command is CLR, don't collect arguments
+            if currentCode != "F0":
+                try:
+                    # Keep popping until there's another opcode in the queue
+                    while hexList[0] not in self.kCodebook:
+                        hexArgs.append(hexList.pop(0))
+                except:
+                    pass # End of list
+
+            # Build Our Command Out
+            self.__BuildCommand(currentCode, hexArgs)
+
+            currentCode = ""
+
+        # If at least one valid command was parsed
+        if len(self.currentCommandList) > 0:
+            # Add currentCommandList to commandList
+            self.commandList += self.currentCommandList
+        else:
+            return "No valid commands were parsed"
+
+        # Returns our command list
+        return self.GetCommandString()
+
+    def GetCommandString(self, current = True):
+        '''
+        Returns stringified commandList or 
+        currentCommandList based on "current"
+        '''
+        # if current is True, send currentCommandList. Else send the full one.
+        listToSend = self.currentCommandList if current else self.commandList
+
+        return ";\n".join(listToSend) + ";"
+
+    def __BuildCommand(self, command, hexArgs=[]):
+        '''
+        Sends command and args out to relevant method. 
+        
+        Returns True if successful.
+        '''
+        # If command is "CLR"
+        if command == "F0":
+            self.__Clear()
+
+        # For all other commands
+        else:
+            # Decodes our args
+            decodedArgs = self.__InterpretCodes(hexArgs)
+
+            # Remove all invalid arguments
+            decodedCommands = self.__RemoveInvalidCodes(command, decodedArgs)
+
+            # If we had valid commands after all
+            if decodedCommands != []:
+                # If command is "PEN"
+                if command == "80":
+                    # Only grab the first (and only) argument
+                    penCommand = decodedCommands[0]
+
+                    self.__SetPenUp(penCommand)
+                # If command is "C0"
+                elif command == "A0":
+                    # Convert colorCodes to a tuple
+                    colorCodes = tuple(decodedCommands)
+
+                    self.__SetColor(colorCodes)
+                # If command is "MV"
+                elif command == "C0":
+                    numberOfCommands = len(decodedCommands)
+
+                    # Re-organizes our arguments into coordinate pairs
+                    coordinates = [
+                        (decodedCommands[i], decodedCommands[i+1]) 
+                        for i in range(0, numberOfCommands, 2)
+                    ]
+
+                    self.__MovePen(coordinates)
 
         return True
 
-    def CheckIfOutOfBounds(self, coordinateSet):
+    def __Clear(self, sendToCommandList=True):
         '''
-        Checks if coordinates are out of bounds, and returns coordinates within boundaries 
+        Clears the current settings, making the current point (0,0), 
+        setting the pen to the "up" position,setting outOfBounds to False, 
+        and changing the color to (0,0,0,255) (black). 
+
+        Also appends "CLR" to currentCommandList if sendToCommandList == True.
         '''
-        for i, coordinate in enumerate(coordinateSet):
-            coordNum = int(coordinate)
+        self.currentPoint = (0, 0)      # Current pen coordinates
+        self.lastPoint = (0, 0)         # last pen coordinates
+        self.penUp = True               # If the pen is currently up or not
+        self.outOfBounds = False        # If we're out of bounds
+        self.penColor = (0, 0, 0, 255)  # The pen's current color
+
+        # Sending "CLR" to the commandList is optional, but default
+        if sendToCommandList:
+            self.currentCommandList.append("CLR")
+
+        return True
+
+    def __SetPenUp(self, numCode):
+        '''
+        Sets penUp to True or False depending on numCode.
+
+        Appends "PEN {UP/DOWN}" to currentCommandList depending on the code.
+        '''
+        currentPenUp = self.penUp
+
+        # penUp is True if numCode was decoded as 0
+        self.penUp = True if numCode == 0 else False
+
+        # Don't add "PEN UP/DOWN" to command list if nothing has changed.
+        if currentPenUp != self.penUp:
+            upOrDown = "UP" if numCode == 0 else "DOWN"
+            self.currentCommandList.append("PEN " + upOrDown)
+
+        return True
+
+    def __SetColor(self, colorCodes):
+        '''
+        Sets the current color based on the codes given. 
+
+        Appends "C0 {r} {g} {b} {a}" to currentCommandList.
+
+        Returns True if successful or False if a number
+        is outside of our color range.
+        '''
+        minColor = self.kMinMaxColorValues[0]
+        maxColor = self.kMinMaxColorValues[1]
+
+        for colorCode in colorCodes:
+            # If color code is not between our min and max values (0, 255)
+            if not (minColor <= colorCode <= maxColor):
+                return False
+
+        # Sets the color
+        self.penColor = colorCodes
+        colorValueString = " ".join(str(i) for i in colorCodes)
+
+        # Appends command to our list
+        self.currentCommandList.append("C0 " + colorValueString)
+
+        return True
+
+    def __MovePen(self, coordinatePairsList):
+        ''' 
+        Moves pen based on the coordinates decoded from the given hexArgs. 
+        
+        Appends "PEN {UP/DOWN}" to currentCommandList as necessary. 
+
+        Also checks/sets outOfBounds and appends "MV ({x}, {y})" 
+        to currentCommandList as necessary.
+
+        Returns True if successful
+        '''
+        # Building our command
+        currentCommand = "MV"
+
+        # Set our last point to
+        self.lastPoint = self.currentPoint
+
+        # Iterates through all of our coordinate pairs
+        for coordinatePair in coordinatePairsList:
             currentlyOutOfBounds = self.outOfBounds
 
-            if coordNum > self.kMinMaxCoordinateValues[1]:
-                coordinateSet[i] = self.kMinMaxCoordinateValues[1]
-                currentlyOutOfBounds = True
-            elif coordNum < self.kMinMaxColorValues[0]:
-                coordinateSet[i] = self.kMinMaxCoordinateValues[0]
-                currentlyOutOfBounds = True
+            # Gets weighted coordinatePair
+            weightedCoordinates = self.__WeighCoordinates(
+                coordinatePair
+            )
+
+            # Sets currentPoint to the absolutePoint
+            self.currentPoint = (coordinatePair[0] + self.currentPoint[0], 
+              coordinatePair[1] + self.currentPoint[1])
+
+            # If the weighted point differs from the absolute point
+            if weightedCoordinates != self.currentPoint:
+                self.outOfBounds = True
             else:
-                currentlyOutOfBounds = False
+                self.outOfBounds = False
 
-        if self.outOfBounds != currentlyOutOfBounds:
-            if self.outOfBounds:
-                self.AddAndResetCurrentCommand("PEN UP")
-            else:
-                self.AddAndResetCurrentCommand("PEN DOWN")
+            # If going out of or coming back in bounds
+            if self.outOfBounds != currentlyOutOfBounds:
+                # If the pen isn't already up
+                if not self.penUp:
+                    # If now out of bounds
+                    if self.outOfBounds:
+                        # Append coordinates to our current command
+                        currentCommand += " " + str(weightedCoordinates)
 
-        return coordinateSet
+                        self.currentCommandList.append(currentCommand)
+                        self.currentCommandList.append("PEN UP")
+                    else:
+                        # Coordinates upon re-entry
+                        reEntryCoordinates = self.__WeighCoordinates(
+                            self.lastPoint, False
+                        )
+                        # Append coordinates to our current command
+                        currentCommand += " " + str(reEntryCoordinates)
 
-    def MovePen(self, coordinates):
+                        self.currentCommandList.append(currentCommand)
+                        self.currentCommandList.append("PEN DOWN")
+                    
+                    currentCommand = "MV"
+            
+            # If in bounds and the pen is down, 
+            # append weighted coordinates to current command
+            if not self.outOfBounds and not self.penUp:
+                currentCommand += " " + str(weightedCoordinates)
+
+            # Set last point to current point
+            self.lastPoint = self.currentPoint
+
+        # If the pen isn't down or we're out of bounds
+        if self.penUp or self.outOfBounds:
+            currentCommand += " " + str(weightedCoordinates)
+            
+        # If we have coordinates in it, add the command to command list
+        if currentCommand != "MV":
+            self.currentCommandList.append(currentCommand)
+
+        return True
+
+    def __WeighCoordinates(self, 
+      unweightedCoordinates, testCurrentPoint=True):
         ''' 
-        Moves the pen based on the coordinates given 
+        Modifies coordinates based on kMinMaxCoordinatePointValues
+        and returns the result.
         '''
+        minMaxValues = self.kMinMaxCoordinatePointValues
 
-        coordString = ""
-        for relCoords in coordinates:
-            tempCoords = [relCoords[i] + self.penPosition[i] for i in range(2)]
+        # Absolute coordinates
+        absoluteX = unweightedCoordinates[0] + self.currentPoint[0]
+        absoluteY = unweightedCoordinates[1] + self.currentPoint[1]
 
-            coords = tuple(self.CheckIfOutOfBounds(tempCoords))
+        # Setting up our weighted coordinates
+        weightedX = absoluteX
+        weightedY = absoluteY
+        weightedCoordinates = [weightedX, weightedY]
 
-            if (not self.penUp or self.outOfBounds) and tempCoords != self.penPosition:
-                coordString = " (" + str(coords[0]) + ", " + str(coords[1]) + ")"
-                if "MV" in self.currentCommand:
-                    print(self.outOfBounds, self.penUp, coordString, tempCoords)
-                    self.currentCommand += (coordString)
+        # If we have a vertical or horizontal line between our coordinates
+        if (absoluteX == self.currentPoint[0] or 
+          absoluteY == self.currentPoint[1]):
+            # If x is out of bounds in the negative direction
+            if absoluteX < minMaxValues[0][0]:
+                weightedCoordinates[0] = minMaxValues[0][0]
+            # If x is out of bounds in the positive direction
+            elif absoluteX > minMaxValues[0][1]:
+                weightedCoordinates[0] = minMaxValues[0][1]
+            # If y is out of bounds in the negative direction
+            if absoluteY < minMaxValues[1][0]:
+                weightedCoordinates[1] = minMaxValues[1][0]
+            # If y is out of bounds in the positive direction
+            elif absoluteY > minMaxValues[1][1]:
+                weightedCoordinates[1] = minMaxValues[1][1]
+        # If it's a diagonal line
+        else:
+            currentPoint = self.currentPoint
+
+            unweightedX = unweightedCoordinates[0]
+            unweightedY = unweightedCoordinates[1]
+
+            weightedX = absoluteX
+            weightedY = absoluteY
+
+            try:
+                # Get our tangent
+                tangent = ((unweightedY) / (unweightedX))
+            except: # Can't divide by 0
+                tangent = 1
+
+            # If x is out of bounds in the negative direction
+            if absoluteX < minMaxValues[0][0]:
+                weightedX = minMaxValues[0][0]
+                if testCurrentPoint:
+                    weightedY = math.ceil(currentPoint[0] + 
+                    (minMaxValues[0][0] - currentPoint[0]) * tangent)
                 else:
-                    self.currentCommand = ("MV" + coordString)
+                    weightedY = math.ceil((minMaxValues[0][0] - 
+                      currentPoint[0]) * tangent * 2)
+            # If x is out of bounds in the positive direction
+            elif absoluteX > minMaxValues[0][1]:
+                weightedX = minMaxValues[0][1]
+                if testCurrentPoint:
+                    weightedY = math.ceil(currentPoint[0] + 
+                    (minMaxValues[0][1] - currentPoint[0]) * tangent)
+                else:
+                    weightedY = math.ceil((minMaxValues[0][1] - 
+                      currentPoint[0]) * tangent * 2)
+            # If y is out of bounds in the negative direction
+            elif absoluteY < minMaxValues[1][0]:
+                weightedY = minMaxValues[1][0]
+                
+                try:
+                    weightedX = math.ceil(currentPoint[1] + 
+                      (minMaxValues[1][0] - currentPoint[1]) / tangent)
+                except: # Can't divide by 0
+                    weightedX = weightedX
+            # If y is out of bounds in the positive direction
+            elif absoluteY > minMaxValues[1][1]:
+                weightedY = minMaxValues[1][1]
+                
+                try:
+                    weightedX = math.ceil(currentPoint[1] + 
+                      (minMaxValues[1][1] - currentPoint[1]) / tangent)
+                except: # Can't divide by 0
+                    weightedX = weightedX
 
-            self.penPosition = tuple(tempCoords)
+            weightedCoordinates = [weightedX, weightedY]
+        
+        return tuple(weightedCoordinates)
 
-        if self.penUp:
-            if self.CheckIfMoving():
-                self.currentCommand += (" (" + str(coords[0]) + ", " + str(coords[1]) + ")")
-            else:
-                self.AddAndResetCurrentCommand("MV" + coordString)
-        self.AddAndResetCurrentCommand()
-        return True
-
-    def CheckIfMoving(self):
-        '''
-        Returns True if "MV" is in currentCommand
-        '''
-        if "MV" in self.currentCommand:
-            return True
-        return False
-
-    def SetPenUp(self, penUp):
+    def __InterpretCodes(self, hexCodes):
         ''' 
-        Sets whether the pen is up or down based on passed in boolean variable (penUp) 
+        Interprets hexCodes and returns a list of decoded decimal numbers.
         '''
-        self.penUp = penUp
-        return True
+        numberOfCodes = len(hexCodes)
 
-    def AddAndResetCurrentCommand(self, command=""):
+        # Will hold all of our decoded decimal arguments
+        decodedCommands = []
+
+        # If we have an odd number of codes
+        if numberOfCodes % 2 > 0 and numberOfCodes > 0:
+            hexCodes.pop()
+            numberOfCodes = len(hexCodes)
+
+        # If we have two or more codes
+        if numberOfCodes > 0:
+            # Get a list of decoded arguments using our pairs
+            decodedCommands = [
+                self.hexDecConverter.Decode(hexCodes[i], hexCodes[i+1]) 
+                for i in range(0, numberOfCodes, 2) 
+            ]
+        
+        return decodedCommands
+
+    def __RemoveInvalidCodes(self, command, decimalArgs):
         ''' 
-        Adds current command to lastCommandSet and resets current command to "" 
+        Removes invalid codes from decimalArgs and returns the updated list.
+
+        If the number of invalid codes is smaller than required for the 
+        command, returns an empty list.
         '''
-        self.AddToCurrentCommand(command)
-        if self.currentCommand != "":
-            self.lastCommandSet.append(self.currentCommand)
-            self.currentCommand = ""
-        return True
+        # The number of hexadecimal arguments we need for each command
+        numArgsRequired = int(self.kCodebook[command][1] / 2)
+        argListLength = len(decimalArgs)
+
+        # If command is "MV"
+        if command == "C0":
+            # For each decoded argument
+            for i, dArg in enumerate(decimalArgs):
+                # if out of our specified range of values (-8192, 8191)
+                if not (self.kByteValueBounds[0] <= 
+                  dArg <= self.kByteValueBounds[1]):
+                    # Get a new list with only valid coordinate values
+                    decimalArgs = decimalArgs[:i]
+                    argListLength = len(decimalArgs)
+                    break
+
+            # Our coordinates must be in multiples of four
+            argsTooMany = argListLength % numArgsRequired
+
+            # Pop the last few codes if necessary to have our multiples of four
+            for i in range(argsTooMany):
+                decimalArgs.pop()
+
+            # If we end up with fewer than 4 args altogether, empty the list
+            if len(decimalArgs) < numArgsRequired:
+                decimalArgs = []
+        # For all other commands
+        else:
+            # We must have no more than the required number of arguments
+            argsTooMany = argListLength - numArgsRequired
+            # Pop any extra
+            for i in range(argsTooMany):
+                decimalArgs.pop()
+            
+            # Iterate through each argument
+            for dArg in decimalArgs:
+                # If any of them are outside of our decimal range
+                if not (self.kByteValueBounds[0] <= 
+                  int(dArg) <= self.kByteValueBounds[1]):
+                    # Empty the list
+                    decimalArgs = []
+                    break
+
+        return decimalArgs
     
-    def AddToCurrentCommand(self, string):
-        ''' 
-        Adds given string to current command 
-        '''
-        self.currentCommand += string
-        return True
-
-    def AddToCommandList(self, command):
-        ''' 
-        Adds given command to lastCommandSet 
-        '''
-        self.lastCommandSet += command
-        return True
-
-    def UpdateCommandList(self, command):
-        ''' 
-        Adds lastCommandSet to commandsPerformed 
-        '''
-        self.commandsPerformed += "\n" + self.lastCommandSet
-        return True
-
-    def GetCodePlainEnglish(self, plainEnglishCode):
-        ''' 
-        Returns drawing pad command and number of bytes using the given plainEnglishCode 
-        '''
-        print(type(self.kPlainEnglishCodes[plainEnglishCode]))
-        return self.kCodeBook[self.kPlainEnglishCodes[plainEnglishCode.upper()]]
-
-dp = ADrawingPad()
-test = dp.Action("F0A0417F40004000417FC067086708804001C0670840004000187818784000804000")
-
-print(test)

@@ -1,7 +1,13 @@
-# from DrawingPad import ADrawingPad
-from HexDecConverter import AHexDecConverter
+from DrawingPad import ADrawingPad
 
-# dp = ADrawingPad()
-hdc = AHexDecConverter()
-# print(hdc.Encode(4000))
-print(hdc.Decode("40", "00"))
+drawingPad = ADrawingPad()
+
+inFile = open("input.txt", "r")
+outFile = open("output.txt", "w")
+
+for line in inFile:
+    outFile.write(drawingPad.Action(line))
+    outFile.write("\n\n")
+
+inFile.close()
+outFile.close()
